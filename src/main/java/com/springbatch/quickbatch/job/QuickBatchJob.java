@@ -1,6 +1,8 @@
 package com.springbatch.quickbatch.job;
 
+import com.springbatch.quickbatch.fields.QuicBatchFieldSet;
 import com.springbatch.quickbatch.handler.BatchStepExceptionHandler;
+import com.springbatch.quickbatch.listener.QuickBatchListener;
 import com.springbatch.quickbatch.model.UserInfo;
 import com.springbatch.quickbatch.processor.BatchItemProcessor;
 import com.springbatch.quickbatch.writer.BatchItemWriter;
@@ -38,7 +40,7 @@ import java.util.Date;
  * @Description:
  */
 @Configuration
-public class QuickBatchJob implements JobExecutionListener {
+public class QuickBatchJob{
     private static final Logger logger = LoggerFactory.getLogger(QuickBatchJob.class);
 
     @Autowired
@@ -60,7 +62,13 @@ public class QuickBatchJob implements JobExecutionListener {
     public BatchItemProcessor batchitemprocessor;
 
     @Autowired
+    private QuickBatchListener quickBatchListener;
+
+    @Autowired
     JobLauncher jobLauncher;
+
+    @Autowired
+    private QuicBatchFieldSet quicBatchFieldSet;
 
     @Scheduled(cron = "0/30 * * * * ?")
     public void runJob() throws JobParametersInvalidException, JobExecutionAlreadyRunningException, JobRestartException, JobInstanceAlreadyCompleteException {
@@ -71,20 +79,28 @@ public class QuickBatchJob implements JobExecutionListener {
 
     @Bean
     public Job testJob(){
-        return jobBuilderFactory.get("testJob").listener(this).flow(testStep()).end().build();
+        return jobBuilderFactory.get("testJob").listener(quickBatchListener).flow(testStep()).end().build();
     }
 
     @Bean
     public Step testStep() {
         return stepBuilderFactory.get("testStep")
+                //每次提交的数量
                 .<UserInfo,UserInfo>chunk(1000)
+                //去读取指定的文件 读取文件是一行一行进行读取，但是writer中的写是在一块写的
                 .reader(fileReader())
+                //由于reader的时候是一行一行进行读取的，故可以对一行数据进行数据的清洗
                 .processor(batchitemprocessor)
+                //写入到数据库当中
                 .writer(batchitemwriter)
                 .faultTolerant()
+                //跳过异常
                 .skip(Exception.class)
+                //跳过的最大次数
                 .skipLimit(10)
+                //允许重试
                 .allowStartIfComplete(true)
+                //事务
                 .transactionManager(platformTransactionManager)
                 .build();
     }
@@ -94,32 +110,11 @@ public class QuickBatchJob implements JobExecutionListener {
         flatFileItemReader.setResource(new FileSystemResource("E:\\home\\20180914.txt"));
         flatFileItemReader.setEncoding("GBK");
         DefaultLineMapper<UserInfo> defaultLineMapper = new DefaultLineMapper<UserInfo>();
-        defaultLineMapper.setFieldSetMapper(new FieldSetMapper<UserInfo>() {
-            @Override
-            public UserInfo mapFieldSet(FieldSet fieldSet) throws BindException {
-                UserInfo user = new UserInfo();
-                user.setCardNo(fieldSet.readString(0));
-                user.setIdCard(fieldSet.readString(1));
-                user.setMobileNo(fieldSet.readString(2));
-                user.setUserName(fieldSet.readString(3));
-                return user;
-            }
-        });
+        defaultLineMapper.setFieldSetMapper(quicBatchFieldSet);
         defaultLineMapper.setLineTokenizer(new DelimitedLineTokenizer("|"));
         flatFileItemReader.setLineMapper(defaultLineMapper);
         return flatFileItemReader;
     }
 
-    @Override
-    public void beforeJob(JobExecution jobExecution) {
-        logger.info("this is job startting!");
 
-    }
-
-    @Override
-    public void afterJob(JobExecution jobExecution) {
-
-        logger.info("this is job ending!");
-
-    }
 }
